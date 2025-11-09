@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(nslookup:*)",
+      "Bash(curl:*)",
+      "Bash(openssl s_client:*)",
+      "Bash(openssl:*)",
+      "Bash(ssh:*)",
+      "Bash(grep:*)",
+      "Bash(npx bmad-method@alpha install)",
+      "Bash(del:*)",
+      "Bash(tree:*)",
+      "Bash(awk:*)",
+      "Bash(dir:*)",
+      "Bash(python:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(chmod:*)",
+      "Bash(bash:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
