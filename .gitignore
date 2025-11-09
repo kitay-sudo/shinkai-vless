@@ -1,0 +1,23 @@
+# IDE и редакторы
+.claude/
+.vscode/
+.idea/
+
+# BMAD
+bmad/
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+
+# Логи
+*.log
+
+# Временные файлы
+*.tmp
+*.temp
+*.swp
+*.bak
+
+# Архивы диагностики
+chameleon-diag-*.tar.gz
