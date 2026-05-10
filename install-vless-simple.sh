@@ -3,7 +3,7 @@
 # ============================================
 # Chameleon — Simple VLESS Reality Installer
 # ============================================
-# Usage: sudo ./install-vless-simple.sh
+# Usage: sudo ./install-vless-simple.sh [server-address] [sni-domain]
 # Installs Xray with VLESS + Reality on port 8443
 # One proven protocol, works everywhere
 
@@ -88,12 +88,18 @@ fi
 
 # ── User Input ───────────────────────────────
 
+SERVER_ADDR="${1:-${SERVER_ADDR:-}}"
+SNI_DOMAIN="${2:-${SNI_DOMAIN:-}}"
+
 print_header
 
 echo -e "  ${CYAN}${BOLD}Configuration${NC}"
 echo ""
 
-read -p "  Server address (domain or IP): " SERVER_ADDR
+if [ -z "$SERVER_ADDR" ]; then
+  read -p "  Server address (domain or IP): " SERVER_ADDR
+fi
+
 if [ -z "$SERVER_ADDR" ]; then
   echo -e "  ${RED}${CROSS}  Address cannot be empty${NC}"
   exit 1
@@ -101,7 +107,9 @@ fi
 
 echo ""
 echo -e "  ${DIM}Recommended SNI: static.rutube.ru, cloudflare.com, www.google.com${NC}"
-read -p "  SNI domain [static.rutube.ru]: " SNI_DOMAIN
+if [ -z "$SNI_DOMAIN" ]; then
+  read -p "  SNI domain [static.rutube.ru]: " SNI_DOMAIN
+fi
 SNI_DOMAIN=${SNI_DOMAIN:-static.rutube.ru}
 
 echo ""
@@ -142,14 +150,18 @@ echo ""
 # ── Step 3: Generate Reality keys ──
 step_start "Generating Reality keys..."
 
-KEYS=$(/usr/local/bin/xray x25519 2>/dev/null)
-PRIVATE_KEY=$(echo "$KEYS" | grep "Private key:" | awk '{print $3}')
-PUBLIC_KEY=$(echo "$KEYS" | grep "Public key:" | awk '{print $3}')
+KEYS=$(/usr/local/bin/xray x25519 2>&1)
 
-# Fallback for different xray output formats
+# Universal parsing: xray x25519 output varies by version:
+#   "Private key: xxx"  |  "PrivateKey: xxx"
+#   "Public key: xxx"   |  "PublicKey: xxx"  |  "Password: xxx"
+PRIVATE_KEY=$(echo "$KEYS" | grep -iE "privat" | awk '{print $NF}')
+PUBLIC_KEY=$(echo "$KEYS" | grep -iE "public|password" | head -1 | awk '{print $NF}')
+
+# Fallback: take line 1 = private, line 2 = public
 if [ -z "$PRIVATE_KEY" ]; then
-  PRIVATE_KEY=$(echo "$KEYS" | grep -i "privat" | awk '{print $NF}')
-  PUBLIC_KEY=$(echo "$KEYS" | grep -i "publi" | awk '{print $NF}')
+  PRIVATE_KEY=$(echo "$KEYS" | sed -n '1p' | awk '{print $NF}')
+  PUBLIC_KEY=$(echo "$KEYS" | sed -n '2p' | awk '{print $NF}')
 fi
 
 UUID=$(cat /proc/sys/kernel/random/uuid)
@@ -160,6 +172,8 @@ if [ -n "$PRIVATE_KEY" ] && [ -n "$PUBLIC_KEY" ] && [ -n "$UUID" ]; then
   info "UUID: ${UUID:0:8}..."
 else
   step_fail "Key generation failed"
+  info "xray x25519 output:"
+  echo "$KEYS" | while IFS= read -r line; do info "$line"; done
   exit 1
 fi
 

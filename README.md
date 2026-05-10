@@ -1,190 +1,117 @@
-# 🦎 Chameleon VPN
+# Chameleon VLESS
 
-Простой и надежный VLESS + Reality VPN. Один протокол, один порт, максимальная стабильность.
+Простой установщик Xray VLESS + Reality на Linux-сервер.
 
-## Быстрый старт
+## Установка одной командой
 
-### На Origin сервере (где будет Xray):
+На сервере:
 
 ```bash
-bash install-vless-simple.sh
+curl -sSL https://raw.githubusercontent.com/kitay-sudo/Chameleon/main/install.sh | sudo bash -s -- SERVER_IP_OR_DOMAIN
 ```
 
-**Введите:**
-- Адрес: IP сервера или домен
-- SNI: `static.rutube.ru` (или Enter)
+Пример:
 
-**Получите VLESS ссылку** и импортируйте в клиент!
+```bash
+curl -sSL https://raw.githubusercontent.com/kitay-sudo/Chameleon/main/install.sh | sudo bash -s -- 1.2.3.4
+```
 
-## Клиенты
+С явным SNI:
 
-**Рекомендуется:** [Happ](https://www.happ.su/) - универсальный клиент для всех платформ
+```bash
+curl -sSL https://raw.githubusercontent.com/kitay-sudo/Chameleon/main/install.sh | sudo bash -s -- 1.2.3.4 static.rutube.ru
+```
 
-Альтернативы:
+Если запускать из уже скачанного репозитория:
+
+```bash
+sudo bash install-vless-simple.sh SERVER_IP_OR_DOMAIN static.rutube.ru
+```
+
+Без аргументов скрипт спросит адрес сервера и SNI интерактивно.
+
+## Можно ли ставить рядом с Chameleon
+
+Да. Конфликта нет:
+
+- Chameleon обычно слушает `443`.
+- VLESS Reality из этого скрипта слушает `8443`.
+- Сервисы разные: `chameleon` и `xray`.
+
+После установки на одном сервере будут работать оба варианта:
+
+- Chameleon: `https/tunnel` на `443`.
+- VLESS Reality: `vless://...` на `8443`.
+
+Важно открыть порт `8443/tcp` у провайдера/VPS firewall, если он закрыт.
+
+## Где взять ссылку VLESS
+
+После установки:
+
+```bash
+sudo cat /root/vless-config/links.txt
+```
+
+Импортируй эту ссылку в клиент:
+
 - Android: v2rayNG
 - iOS: Streisand
 - Windows: v2rayN
+- Универсально: Happ
 
 ## Управление
 
-### Основные команды:
 ```bash
-# Статус
 systemctl status xray
-
-# Логи
 journalctl -u xray -f
-
-# Перезапуск
 systemctl restart xray
-
-# VLESS ссылка
-cat /root/vless-config/links.txt
-
-# Проверка порта
 ss -tlnp | grep 8443
+```
 
-# Диагностика
+Диагностика:
+
+```bash
 bash diagnose.sh
 ```
 
-## Проброс через Yandex сервер
+## Что ставится
 
-Если нужен российский IP или промежуточный сервер:
+- Xray
+- VLESS + Reality
+- TCP
+- Flow: `xtls-rprx-vision`
+- Порт: `8443`
+- SNI по умолчанию: `static.rutube.ru`
 
-### На Yandex сервере:
-```bash
-bash setup-proxy-simple.sh
+Конфиг сервера:
+
+```text
+/usr/local/etc/xray/config.json
 ```
 
-**Введите:** IP Origin сервера
+Сохраненные ключи и ссылки:
 
-**Получите:** VLESS ссылку с IP Yandex сервера
-
-**Схема:**
-```
-Клиент → Yandex (проброс) → Origin (Xray) → Интернет
+```text
+/root/vless-config/keys.txt
+/root/vless-config/links.txt
 ```
 
-### Управление пробросом:
-```bash
-# Статус
-systemctl status vless-proxy-8443
+## Обновление или пересоздание ключей
 
-# Логи
-journalctl -u vless-proxy-8443 -f
-
-# Проверка
-ss -tlnp | grep 8443
-```
-
-## Решение проблем
-
-### "Сервер закрыл соединение"
+Запусти установку заново:
 
 ```bash
-# Проверьте Xray
-systemctl status xray
-
-# Проверьте порт
-ss -tlnp | grep 8443
-
-# Откройте порт
-ufw allow 8443/tcp
-
-# Перезапустите
-systemctl restart xray
+curl -sSL https://raw.githubusercontent.com/kitay-sudo/Chameleon/main/install.sh | sudo bash -s -- SERVER_IP_OR_DOMAIN
 ```
 
-### Нет запросов в логах
-
-**Причина:** Клиент не достигает сервера
-
-**Решение:**
-- Проверьте IP в VLESS ссылке
-- Проверьте DNS (если используете домен)
-- Используйте IP вместо домена для надежности
-
-### Полная диагностика
-
-```bash
-bash diagnose.sh
-# Создаст архив: /root/chameleon-diag-*.tar.gz
-```
-
----
-
-## Технические детали
-
-**Конфигурация:**
-- Протокол: VLESS + Reality
-- Network: TCP
-- Flow: xtls-rprx-vision
-- Fingerprint: random
-- SNI: static.rutube.ru (рекомендуется)
-- Порт: 8443
-
-**Почему порт 8443:**
-- Не конфликтует с HTTPS (443)
-- Хорошо проходит через firewall
-- Меньше блокировок
-
-**Домен vs IP:**
-| Параметр | Домен | IP |
-|----------|-------|-----|
-| Надежность | Зависит от DNS | ✅ Не зависит |
-| Скорость | DNS lookup | ✅ Прямое |
-| Настройка | A-запись нужна | ✅ Не требуется |
-| **Рекомендация** | Постоянное использование | **Максимальная надежность** |
-
-## Файлы проекта
-
-```
-chameleon/
-├── install-vless-simple.sh    # Установка на Origin
-├── setup-proxy-simple.sh      # Проброс на Yandex
-├── diagnose.sh                # Диагностика
-└── README.md                  # Эта документация
-```
-
-**На сервере:**
-```
-/usr/local/etc/xray/config.json       # Конфигурация
-/root/vless-config/links.txt          # VLESS ссылки
-/root/vless-config/keys.txt           # Ключи
-```
-
----
+Скрипт пересоздаст конфиг, ключи и VLESS-ссылку.
 
 ## Безопасность
 
-**Не публикуйте:**
+Не публикуй:
+
 - UUID
-- Private/Public Keys
-- VLESS ссылки
-
-**Регулярно обновляйте:**
-```bash
-apt update && apt upgrade -y
-```
-
-**Смена ключей:**
-```bash
-bash install-vless-simple.sh  # Создаст новые ключи
-```
-
-## FAQ
-
-**Q: Домен или IP?**
-A: Оба работают. IP надежнее (не зависит от DNS).
-
-**Q: Нужен ли проброс?**
-A: Нет, если Origin доступен напрямую. Да, если нужен конкретный IP.
-
-**Q: Как обновить конфигурацию?**
-A: Запустите `install-vless-simple.sh` заново.
-
-**Q: Не работает - что делать?**
-A: Запустите `diagnose.sh` и проверьте `systemctl status xray`.
-
-**Версия:** 1.0 Simple & Reliable | **Статус:** ✅ Production Ready
+- private key
+- VLESS-ссылку
+- содержимое `/root/vless-config/keys.txt`
