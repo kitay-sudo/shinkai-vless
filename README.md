@@ -1,64 +1,60 @@
-# Chameleon VLESS
+# Shinkai VLESS
 
-Простой установщик Xray VLESS + Reality на Linux-сервер.
+Интерактивный установщик Xray VLESS + Reality для Linux-сервера.
 
-## Установка одной командой
+В проекте оставлен один основной файл установки: `install.sh`. Он работает и локально из скачанного репозитория, и одной командой через `curl | sudo bash`.
+
+## Установка
 
 На сервере:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/kitay-sudo/Chameleon/main/install.sh | sudo bash -s -- SERVER_IP_OR_DOMAIN
+curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/install.sh | sudo bash
 ```
 
-Пример:
+Скрипт интерактивно спросит:
+
+- IP или домен сервера
+- SNI-домен, по умолчанию `static.rutube.ru`
+
+Без интерактива:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/kitay-sudo/Chameleon/main/install.sh | sudo bash -s -- 1.2.3.4
+curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/install.sh | sudo bash -s -- SERVER_IP_OR_DOMAIN
 ```
 
 С явным SNI:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/kitay-sudo/Chameleon/main/install.sh | sudo bash -s -- 1.2.3.4 static.rutube.ru
+curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/install.sh | sudo bash -s -- SERVER_IP_OR_DOMAIN static.rutube.ru
 ```
 
-Если запускать из уже скачанного репозитория:
+Если репозиторий уже скачан:
 
 ```bash
-sudo bash install-vless-simple.sh SERVER_IP_OR_DOMAIN static.rutube.ru
+sudo bash install.sh SERVER_IP_OR_DOMAIN static.rutube.ru
 ```
 
-Без аргументов скрипт спросит адрес сервера и SNI интерактивно.
+## Что ставится
 
-## Можно ли ставить рядом с Chameleon
+- Xray
+- VLESS + Reality
+- TCP inbound на порту `8443`
+- Flow: `xtls-rprx-vision`
+- SNI по умолчанию: `static.rutube.ru`
 
-Да. Конфликта нет:
+Конфиг сервера:
 
-- Chameleon обычно слушает `443`.
-- VLESS Reality из этого скрипта слушает `8443`.
-- Сервисы разные: `chameleon` и `xray`.
-
-После установки на одном сервере будут работать оба варианта:
-
-- Chameleon: `https/tunnel` на `443`.
-- VLESS Reality: `vless://...` на `8443`.
-
-Важно открыть порт `8443/tcp` у провайдера/VPS firewall, если он закрыт.
-
-## Где взять ссылку VLESS
-
-После установки:
-
-```bash
-sudo cat /root/vless-config/links.txt
+```text
+/usr/local/etc/xray/config.json
 ```
 
-Импортируй эту ссылку в клиент:
+Ключи и клиентская ссылка:
 
-- Android: v2rayNG
-- iOS: Streisand
-- Windows: v2rayN
-- Универсально: Happ
+```text
+/root/vless-config/keys.txt
+/root/vless-config/links.txt
+```
 
 ## Управление
 
@@ -69,43 +65,17 @@ systemctl restart xray
 ss -tlnp | grep 8443
 ```
 
-Диагностика:
+Чтобы пересоздать ключи и конфигурацию, запусти установку заново:
 
 ```bash
-bash diagnose.sh
+curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/install.sh | sudo bash -s -- SERVER_IP_OR_DOMAIN
 ```
 
-## Что ставится
+## Firewall
 
-- Xray
-- VLESS + Reality
-- TCP
-- Flow: `xtls-rprx-vision`
-- Порт: `8443`
-- SNI по умолчанию: `static.rutube.ru`
+Открой `8443/tcp` в панели VPS-провайдера, если порт закрыт.
 
-Конфиг сервера:
-
-```text
-/usr/local/etc/xray/config.json
-```
-
-Сохраненные ключи и ссылки:
-
-```text
-/root/vless-config/keys.txt
-/root/vless-config/links.txt
-```
-
-## Обновление или пересоздание ключей
-
-Запусти установку заново:
-
-```bash
-curl -sSL https://raw.githubusercontent.com/kitay-sudo/Chameleon/main/install.sh | sudo bash -s -- SERVER_IP_OR_DOMAIN
-```
-
-Скрипт пересоздаст конфиг, ключи и VLESS-ссылку.
+Скрипт также пытается открыть порт через `ufw` или `iptables` на самом сервере.
 
 ## Безопасность
 

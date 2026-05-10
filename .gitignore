@@ -1,23 +1,24 @@
-# IDE и редакторы
+# Local editor and agent files
+.agents/
 .claude/
 .vscode/
 .idea/
 
-# BMAD
+# Local BMAD workspace
 bmad/
 
-# Системные файлы
+# OS files
 .DS_Store
 Thumbs.db
 
-# Логи
+# Logs
 *.log
 
-# Временные файлы
+# Temporary files
 *.tmp
 *.temp
 *.swp
 *.bak
 
-# Архивы диагностики
-chameleon-diag-*.tar.gz
+# Diagnostics archives
+shinkai-diag-*.tar.gz
