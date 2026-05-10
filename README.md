@@ -1,8 +1,36 @@
 # Shinkai VLESS
 
-Интерактивный установщик Xray VLESS + Reality для Linux-сервера.
+[![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Xray](https://img.shields.io/badge/Xray-VLESS%20Reality-2F80ED)](https://github.com/XTLS/Xray-core)
+[![Platform](https://img.shields.io/badge/Platform-Debian%20%7C%20Ubuntu-555555?logo=linux&logoColor=white)](#что-ставится)
+[![License](https://img.shields.io/badge/License-MIT-green)](#license)
+[![Install](https://img.shields.io/badge/Install-curl%20%7C%20bash-orange)](#установка)
 
-В проекте оставлен один основной файл установки: `install.sh`. Он работает и локально из скачанного репозитория, и одной командой через `curl | sudo bash`.
+Shinkai VLESS - это простой интерактивный установщик Xray VLESS + Reality для Linux-сервера.
+
+Цель проекта - не собрать комбайн из десятков режимов, а дать один понятный и воспроизводимый сценарий: запустить скрипт, ввести адрес сервера, получить готовую VLESS-ссылку для клиента.
+
+## Философия
+
+Shinkai исходит из простой идеи: инфраструктурный скрипт должен быть скучным, читаемым и предсказуемым.
+
+- Один основной файл установки: `install.sh`.
+- Один проверенный протокол: VLESS + Reality.
+- Один порт по умолчанию: `8443/tcp`.
+- Понятный интерактивный запуск без ручного редактирования JSON.
+- Нормальные сообщения об ошибках вместо молчаливых падений.
+- Результат сохраняется в очевидном месте: `/root/vless-config/`.
+
+Проект не пытается заменить полноценную панель управления. Он нужен, когда надо быстро и аккуратно поднять рабочий VLESS Reality на чистом Debian/Ubuntu-сервере.
+
+## Описание
+
+Скрипт устанавливает Xray, генерирует UUID и Reality-ключи, пишет конфиг, открывает порт через `ufw` или `iptables`, запускает сервис `xray` и сохраняет готовую клиентскую ссылку.
+
+Он работает двумя способами:
+
+- локально из скачанного репозитория;
+- одной командой через `curl | sudo bash`.
 
 ## Установка
 
@@ -85,3 +113,7 @@ curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/instal
 - private key
 - VLESS-ссылку
 - содержимое `/root/vless-config/keys.txt`
+
+## License
+
+MIT
