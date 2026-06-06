@@ -184,7 +184,7 @@ require_linux() {
 
 get_query_param() {
   local q="$1" key="$2"
-  printf '%s' "$q" | tr '&' '\n' | while IFS= read -r kv; do
+  printf '%s\n' "$q" | tr '&' '\n' | while IFS= read -r kv; do
     case "$kv" in
       "$key"=*) printf '%s' "${kv#*=}"; break ;;
     esac
