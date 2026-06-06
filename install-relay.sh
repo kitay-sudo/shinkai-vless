@@ -447,8 +447,62 @@ write_xray_config() {
 }
 EOF
 
+  install_mode_switch
+
   step_done "Xray relay configuration written"
   echo ""
+}
+
+install_mode_switch() {
+  cat > /usr/local/bin/vless-mode <<'MODESCRIPT'
+#!/usr/bin/env bash
+# vless-mode - switch the RF node between chain (-> upstream) and direct (RF exit)
+set -e
+
+XRAY_CONFIG="/usr/local/etc/xray/config.json"
+
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+  echo "Run as root: sudo vless-mode $*" >&2
+  exit 1
+fi
+
+current() {
+  if grep -q '"outboundTag": "to-upstream"' "$XRAY_CONFIG"; then
+    echo chain
+  else
+    echo direct
+  fi
+}
+
+usage() {
+  cat <<USAGE
+Usage: vless-mode {chain|direct|status}
+  chain   - traffic exits via upstream server (e.g. Sweden)
+  direct  - traffic exits directly from this (RF) server
+  status  - show current mode
+USAGE
+}
+
+case "${1:-}" in
+  chain)  target="to-upstream"; label="chain (-> upstream)" ;;
+  direct) target="direct";      label="direct (RF exit)" ;;
+  status) echo "Current mode: $(current)"; exit 0 ;;
+  *) usage; exit 1 ;;
+esac
+
+sed -i -E 's/("outboundTag": ")[^"]+(")/\1'"$target"'\2/' "$XRAY_CONFIG"
+systemctl restart xray
+sleep 1
+
+if systemctl is-active --quiet xray; then
+  echo "Switched to: $label"
+else
+  echo "Xray failed to start. Check: journalctl -u xray -n 20" >&2
+  exit 1
+fi
+MODESCRIPT
+
+  chmod +x /usr/local/bin/vless-mode
 }
 
 configure_firewall() {
@@ -570,6 +624,12 @@ print_result() {
   echo -e "  ${YELLOW}${VLESS_LINK}${NC}"
   echo ""
   echo -e "  ${DIM}Chain:       client -> ${RF_ADDR}:${PORT} -> ${SE_ADDR}:${SE_PORT} -> internet${NC}"
+  echo ""
+  echo -e "  ${CYAN}${BOLD}Switch exit mode (same client link):${NC}"
+  echo -e "  ${DIM}Via upstream: sudo vless-mode chain${NC}"
+  echo -e "  ${DIM}Direct (RF):  sudo vless-mode direct${NC}"
+  echo -e "  ${DIM}Show mode:    sudo vless-mode status${NC}"
+  echo ""
   echo -e "  ${DIM}View link:   cat ${CONFIG_DIR}/relay-links.txt${NC}"
   echo -e "  ${DIM}View keys:   cat ${CONFIG_DIR}/relay-keys.txt${NC}"
   echo -e "  ${DIM}Status:      systemctl status xray${NC}"
