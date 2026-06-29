@@ -48,6 +48,8 @@ SE_PBK=""
 SE_SNI=""
 SE_SID=""
 SE_FLOW=""
+SE_TYPE=""
+SE_PATH=""
 
 cleanup() {
   rm -f "$LOG_FILE"
@@ -223,9 +225,19 @@ parse_upstream_link() {
   SE_SNI="$(get_query_param "$query" sni)"
   SE_SID="$(get_query_param "$query" sid)"
   SE_FLOW="$(get_query_param "$query" flow)"
+  SE_TYPE="$(get_query_param "$query" type)"
+  SE_PATH="$(get_query_param "$query" path)"
 
-  # Sweden server uses Vision; default it if the link omitted flow
-  [ -z "$SE_FLOW" ] && SE_FLOW="xtls-rprx-vision"
+  # Default transport to xhttp (current Shinkai server); decode the path
+  [ -z "$SE_TYPE" ] && SE_TYPE="xhttp"
+  SE_PATH="${SE_PATH//%2F//}"; SE_PATH="${SE_PATH//%2f//}"
+  [ -z "$SE_PATH" ] && SE_PATH="/"
+
+  # Vision flow only applies to raw TCP; xhttp/grpc carry no flow
+  case "$SE_TYPE" in
+    tcp) [ -z "$SE_FLOW" ] && SE_FLOW="xtls-rprx-vision" ;;
+    *)   SE_FLOW="" ;;
+  esac
 
   [ -n "$SE_UUID" ] && [ -n "$SE_ADDR" ] && [ -n "$SE_PORT" ] && \
     [ -n "$SE_PBK" ] && [ -n "$SE_SNI" ] && [ -n "$SE_SID" ]
@@ -248,12 +260,18 @@ collect_upstream() {
     [ -n "$pasted" ] && warn "Link could not be parsed, entering fields manually."
 
     SE_ADDR="$(read_from_tty "Upstream server address (IP or domain)")"
-    SE_PORT="$(read_from_tty "Upstream port" "8443")"
+    SE_PORT="$(read_from_tty "Upstream port" "443")"
     SE_UUID="$(read_from_tty "Upstream UUID")"
     SE_PBK="$(read_from_tty "Upstream public key (pbk)")"
     SE_SNI="$(read_from_tty "Upstream SNI")"
     SE_SID="$(read_from_tty "Upstream short id (sid)")"
-    SE_FLOW="$(read_from_tty "Upstream flow" "xtls-rprx-vision")"
+    SE_TYPE="$(read_from_tty "Upstream transport (xhttp/tcp)" "xhttp")"
+    if [ "$SE_TYPE" = "xhttp" ]; then
+      SE_PATH="$(read_from_tty "Upstream path" "/")"
+      SE_FLOW=""
+    else
+      SE_FLOW="$(read_from_tty "Upstream flow" "xtls-rprx-vision")"
+    fi
   fi
 
   [ -n "$SE_UUID" ] && [ -n "$SE_ADDR" ] && [ -n "$SE_PORT" ] && \
@@ -286,7 +304,7 @@ collect_input() {
   info "Entry (client -> RF): ${RF_ADDR}:${PORT}/tcp, SNI ${INBOUND_SNI}"
   info "Upstream (RF -> Sweden): ${SE_ADDR}:${SE_PORT}, SNI ${SE_SNI}"
   info "Chain: client -> ${RF_ADDR} -> ${SE_ADDR} -> internet"
-  info "Protocol: VLESS + Reality + xtls-rprx-vision (both hops)"
+  info "Protocol: VLESS + XHTTP + Reality (HTTP/2-shaped, both hops)"
 
   if [ -r /dev/tty ]; then
     echo ""
@@ -348,6 +366,8 @@ generate_keys() {
 
   UUID="$(cat /proc/sys/kernel/random/uuid)"
   SHORT_ID="$(openssl rand -hex 8)"
+  XPATH="/$(openssl rand -hex 6)"
+  XPATH_ENC="%2F${XPATH#/}"
 
   if [ -n "$PRIVATE_KEY" ] && [ -n "$PUBLIC_KEY" ] && [ -n "$UUID" ] && [ -n "$SHORT_ID" ]; then
     step_done "Reality keys generated"
@@ -365,6 +385,37 @@ write_xray_config() {
 
   mkdir -p "$(dirname "$XRAY_CONFIG")"
 
+  local upstream_stream
+  if [ "$SE_TYPE" = "xhttp" ]; then
+    upstream_stream=$(cat <<EOF
+        "network": "xhttp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "${SE_SNI}",
+          "fingerprint": "chrome",
+          "publicKey": "${SE_PBK}",
+          "shortId": "${SE_SID}"
+        },
+        "xhttpSettings": {
+          "path": "${SE_PATH}",
+          "mode": "auto"
+        }
+EOF
+)
+  else
+    upstream_stream=$(cat <<EOF
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "${SE_SNI}",
+          "fingerprint": "chrome",
+          "publicKey": "${SE_PBK}",
+          "shortId": "${SE_SID}"
+        }
+EOF
+)
+  fi
+
   cat > "$XRAY_CONFIG" <<EOF
 {
   "log": {
@@ -378,20 +429,23 @@ write_xray_config() {
       "settings": {
         "clients": [
           {
-            "id": "${UUID}",
-            "flow": "xtls-rprx-vision"
+            "id": "${UUID}"
           }
         ],
         "decryption": "none"
       },
       "streamSettings": {
-        "network": "tcp",
+        "network": "xhttp",
         "security": "reality",
         "realitySettings": {
           "dest": "${INBOUND_SNI}:443",
           "serverNames": ["${INBOUND_SNI}"],
           "privateKey": "${PRIVATE_KEY}",
           "shortIds": ["${SHORT_ID}"]
+        },
+        "xhttpSettings": {
+          "path": "${XPATH}",
+          "mode": "auto"
         }
       }
     }
@@ -416,14 +470,7 @@ write_xray_config() {
         ]
       },
       "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "serverName": "${SE_SNI}",
-          "fingerprint": "chrome",
-          "publicKey": "${SE_PBK}",
-          "shortId": "${SE_SID}"
-        }
+${upstream_stream}
       }
     },
     {
@@ -551,13 +598,14 @@ save_result() {
   mkdir -p "$CONFIG_DIR"
   chmod 700 "$CONFIG_DIR"
 
-  VLESS_LINK="vless://${UUID}@${RF_ADDR}:${PORT}?type=tcp&security=reality&fp=random&pbk=${PUBLIC_KEY}&sni=${INBOUND_SNI}&sid=${SHORT_ID}&flow=xtls-rprx-vision#Shinkai-RF"
+  VLESS_LINK="vless://${UUID}@${RF_ADDR}:${PORT}?type=xhttp&path=${XPATH_ENC}&mode=auto&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${INBOUND_SNI}&sid=${SHORT_ID}&encryption=none#Shinkai-RF"
 
   cat > "${CONFIG_DIR}/relay-keys.txt" <<EOF
 === Entry hop (client -> RF) ===
 RF Server: ${RF_ADDR}
 Inbound SNI: ${INBOUND_SNI}
 Port: ${PORT}
+Path: ${XPATH}
 
 UUID: ${UUID}
 Private Key: ${PRIVATE_KEY}
@@ -570,7 +618,8 @@ SNI: ${SE_SNI}
 UUID: ${SE_UUID}
 Public Key: ${SE_PBK}
 Short ID: ${SE_SID}
-Flow: ${SE_FLOW}
+Transport: ${SE_TYPE}
+Path: ${SE_PATH}
 EOF
 
   cat > "${CONFIG_DIR}/relay-links.txt" <<EOF
@@ -584,10 +633,11 @@ UUID:        ${UUID}
 Public Key:  ${PUBLIC_KEY}
 Short ID:    ${SHORT_ID}
 SNI:         ${INBOUND_SNI}
-Type:        tcp
+Type:        xhttp
+Path:        ${XPATH}
+Mode:        auto
 Security:    reality
-Fingerprint: random
-Flow:        xtls-rprx-vision
+Fingerprint: chrome
 
 Chain: client -> ${RF_ADDR}:${PORT} -> ${SE_ADDR}:${SE_PORT} -> internet
 EOF

@@ -28,7 +28,7 @@ FAILED=0
 
 SERVER_ADDR="${1:-${VLESS_SERVER:-${SERVER_ADDR:-}}}"
 SNI_DOMAIN="${2:-${VLESS_SNI:-${SNI_DOMAIN:-}}}"
-PORT="${VLESS_PORT:-8443}"
+PORT="${VLESS_PORT:-443}"
 DEFAULT_SNI="static.rutube.ru"
 CONFIG_DIR="/root/vless-config"
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
@@ -142,7 +142,7 @@ Usage:
 Environment:
   VLESS_SERVER  Server IP or domain
   VLESS_SNI     Reality SNI domain, default: ${DEFAULT_SNI}
-  VLESS_PORT    Listen port, default: 8443
+  VLESS_PORT    Listen port, default: 443
 EOF
 }
 
@@ -187,7 +187,7 @@ collect_input() {
   info "Server: ${SERVER_ADDR}"
   info "SNI: ${SNI_DOMAIN}"
   info "Port: ${PORT}/tcp"
-  info "Protocol: VLESS + Reality + TCP + xtls-rprx-vision"
+  info "Protocol: VLESS + XHTTP + Reality (HTTP/2-shaped, anti-DPI)"
 
   if [ -r /dev/tty ]; then
     echo ""
@@ -249,6 +249,8 @@ generate_keys() {
 
   UUID="$(cat /proc/sys/kernel/random/uuid)"
   SHORT_ID="$(openssl rand -hex 8)"
+  XPATH="/$(openssl rand -hex 6)"
+  XPATH_ENC="%2F${XPATH#/}"
 
   if [ -n "$PRIVATE_KEY" ] && [ -n "$PUBLIC_KEY" ] && [ -n "$UUID" ] && [ -n "$SHORT_ID" ]; then
     step_done "Reality keys generated"
@@ -279,20 +281,23 @@ write_xray_config() {
       "settings": {
         "clients": [
           {
-            "id": "${UUID}",
-            "flow": "xtls-rprx-vision"
+            "id": "${UUID}"
           }
         ],
         "decryption": "none"
       },
       "streamSettings": {
-        "network": "tcp",
+        "network": "xhttp",
         "security": "reality",
         "realitySettings": {
           "dest": "${SNI_DOMAIN}:443",
           "serverNames": ["${SNI_DOMAIN}"],
           "privateKey": "${PRIVATE_KEY}",
           "shortIds": ["${SHORT_ID}"]
+        },
+        "xhttpSettings": {
+          "path": "${XPATH}",
+          "mode": "auto"
         }
       }
     }
@@ -356,12 +361,13 @@ save_result() {
   mkdir -p "$CONFIG_DIR"
   chmod 700 "$CONFIG_DIR"
 
-  VLESS_LINK="vless://${UUID}@${SERVER_ADDR}:${PORT}?type=tcp&security=reality&fp=random&pbk=${PUBLIC_KEY}&sni=${SNI_DOMAIN}&sid=${SHORT_ID}&flow=xtls-rprx-vision#Shinkai"
+  VLESS_LINK="vless://${UUID}@${SERVER_ADDR}:${PORT}?type=xhttp&path=${XPATH_ENC}&mode=auto&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${SNI_DOMAIN}&sid=${SHORT_ID}&encryption=none#Shinkai"
 
   cat > "${CONFIG_DIR}/keys.txt" <<EOF
 Server: ${SERVER_ADDR}
 SNI: ${SNI_DOMAIN}
 Port: ${PORT}
+Path: ${XPATH}
 
 UUID: ${UUID}
 Private Key: ${PRIVATE_KEY}
@@ -378,10 +384,11 @@ UUID:        ${UUID}
 Public Key:  ${PUBLIC_KEY}
 Short ID:    ${SHORT_ID}
 SNI:         ${SNI_DOMAIN}
-Type:        tcp
+Type:        xhttp
+Path:        ${XPATH}
+Mode:        auto
 Security:    reality
-Fingerprint: random
-Flow:        xtls-rprx-vision
+Fingerprint: chrome
 Port:        ${PORT}
 EOF
 
