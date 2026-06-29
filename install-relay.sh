@@ -184,6 +184,34 @@ require_linux() {
   fi
 }
 
+check_port() {
+  local p="$1"
+
+  command -v ss >/dev/null 2>&1 || return 0   # can't check -> skip
+
+  local line
+  line="$(ss -tlnp "( sport = :${p} )" 2>/dev/null | grep -i LISTEN || true)"
+  [ -z "$line" ] && return 0                  # port is free
+
+  # Our own Xray already holding the port is fine - we will rewrite and restart it.
+  if printf '%s' "$line" | grep -q '"xray"'; then
+    return 0
+  fi
+
+  local proc
+  proc="$(printf '%s' "$line" | grep -oE 'users:\(\("[^"]+"' | head -n1 | sed -E 's/.*"([^"]+)"/\1/')"
+
+  echo ""
+  warn "Port ${p}/tcp is already in use by another service: ${proc:-unknown}"
+  info "$(printf '%s' "$line" | head -n1 | sed 's/^[[:space:]]*//')"
+  echo ""
+  info "Free that port (stop the service holding it), then re-run."
+  info "Or install on a different port:"
+  info "  curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/install-relay.sh | sudo RELAY_PORT=8443 bash"
+  echo ""
+  fail "Aborting: port ${p} is occupied. Nothing was installed or changed."
+}
+
 get_query_param() {
   local q="$1" key="$2"
   printf '%s\n' "$q" | tr '&' '\n' | while IFS= read -r kv; do
@@ -705,6 +733,8 @@ main() {
   info "Entry: ${RF_ADDR}:${PORT}/tcp (SNI ${INBOUND_SNI})"
   info "Upstream: ${SE_ADDR}:${SE_PORT} (SNI ${SE_SNI})"
   echo ""
+
+  check_port "$PORT"
 
   install_dependencies
   install_xray

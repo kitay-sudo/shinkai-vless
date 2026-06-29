@@ -35,9 +35,11 @@ if [ -f "$XRAY_CONFIG" ]; then
 fi
 PORTS="${PORTS} 443 8443"
 
-# 1. Stop and disable the Xray service.
+# 1. Stop and disable the Xray service, then kill any orphaned xray process
+#    (e.g. left over from a failed install) so our port is actually freed.
 systemctl stop xray >/dev/null 2>&1 || true
 systemctl disable xray >/dev/null 2>&1 || true
+pkill -x xray >/dev/null 2>&1 || true
 echo -e "  ${GREEN}OK${NC} Xray service stopped"
 
 # 2. Remove Xray via its official installer (purges service, binary, logs, geodata).
@@ -67,6 +69,17 @@ if command -v iptables-save >/dev/null 2>&1 && [ -d /etc/iptables ]; then
   iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
 echo -e "  ${GREEN}OK${NC} Firewall rules cleaned"
+
+# 5. Tell the user if another (foreign) service still sits on the usual ports.
+if command -v ss >/dev/null 2>&1; then
+  for p in 443 8443; do
+    leftover="$(ss -tlnp "( sport = :${p} )" 2>/dev/null | grep -i LISTEN || true)"
+    if [ -n "$leftover" ]; then
+      who="$(printf '%s' "$leftover" | grep -oE 'users:\(\("[^"]+"' | head -n1 | sed -E 's/.*"([^"]+)"/\1/')"
+      echo -e "  ${YELLOW}!${NC} Port ${p}/tcp is still used by another service: ${who:-unknown} (not ours, left untouched)"
+    fi
+  done
+fi
 
 echo ""
 echo -e "  ${GREEN}${BOLD}Shinkai fully removed.${NC}"

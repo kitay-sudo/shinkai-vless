@@ -162,6 +162,34 @@ require_linux() {
   fi
 }
 
+check_port() {
+  local p="$1"
+
+  command -v ss >/dev/null 2>&1 || return 0   # can't check -> skip
+
+  local line
+  line="$(ss -tlnp "( sport = :${p} )" 2>/dev/null | grep -i LISTEN || true)"
+  [ -z "$line" ] && return 0                  # port is free
+
+  # Our own Xray already holding the port is fine - we will rewrite and restart it.
+  if printf '%s' "$line" | grep -q '"xray"'; then
+    return 0
+  fi
+
+  local proc
+  proc="$(printf '%s' "$line" | grep -oE 'users:\(\("[^"]+"' | head -n1 | sed -E 's/.*"([^"]+)"/\1/')"
+
+  echo ""
+  warn "Port ${p}/tcp is already in use by another service: ${proc:-unknown}"
+  info "$(printf '%s' "$line" | head -n1 | sed 's/^[[:space:]]*//')"
+  echo ""
+  info "Free that port (stop the service holding it), then re-run."
+  info "Or install on a different port:"
+  info "  curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/install.sh | sudo VLESS_PORT=8443 bash -s -- ${SERVER_ADDR} ${SNI_DOMAIN}"
+  echo ""
+  fail "Aborting: port ${p} is occupied. Nothing was installed or changed."
+}
+
 collect_input() {
   print_header
   echo -e "  ${CYAN}${BOLD}Configuration${NC}"
@@ -449,6 +477,8 @@ main() {
   info "SNI: ${SNI_DOMAIN}"
   info "Port: ${PORT}/tcp"
   echo ""
+
+  check_port "$PORT"
 
   install_dependencies
   install_xray
