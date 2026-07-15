@@ -103,6 +103,24 @@ curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/uninst
 
 Не публикуй UUID, private key, `vless://` ссылку и содержимое `/root/vless-config/`.
 
+### Утёк ключ? Ротация одной командой — `vless-rotate`
+
+Команда `vless-rotate` уже стоит на сервере после установки (и `install.sh`, и `install-relay.sh` кладут её в `/usr/local/bin/`). Она генерирует новый UUID и новую пару Reality-ключей, переписывает конфиг, перезапускает Xray и печатает новую ссылку — старый ключ сразу перестаёт работать.
+
+На сервере, где утёк ключ:
+
+```bash
+sudo vless-rotate
+```
+
+Если по какой-то причине команды ещё нет (старая установка), поставить и сразу выполнить ротацию можно одной строкой:
+
+```bash
+sudo curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/vless-rotate -o /usr/local/bin/vless-rotate && sudo chmod +x /usr/local/bin/vless-rotate && sudo vless-rotate
+```
+
+Работает и на основном сервере (`install.sh`), и на РФ-узле (`install-relay.sh`) — скрипт сам определяет тип конфига. На релее ротация меняет только входной хоп (клиент → РФ); апстрим на Швецию не трогается и остаётся рабочим. Новую ссылку раздай клиентам, старую — забудь.
+
 ## License
 
 MIT

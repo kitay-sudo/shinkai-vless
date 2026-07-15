@@ -339,8 +339,175 @@ write_xray_config() {
 }
 EOF
 
+  install_rotate_script
+
   step_done "Xray configuration written"
   echo ""
+}
+
+install_rotate_script() {
+  cat > /usr/local/bin/vless-rotate <<'ROTATESCRIPT'
+#!/usr/bin/env bash
+# vless-rotate - regenerate UUID + Reality keys, kill the old (leaked) client link
+set -Eeuo pipefail
+
+XRAY_CONFIG="/usr/local/etc/xray/config.json"
+CONFIG_DIR="/root/vless-config"
+XRAY_BIN="/usr/local/bin/xray"
+
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+  echo "Run as root: sudo vless-rotate" >&2
+  exit 1
+fi
+
+command -v "$XRAY_BIN" >/dev/null 2>&1 || XRAY_BIN="xray"
+command -v "$XRAY_BIN" >/dev/null 2>&1 || { echo "xray binary not found" >&2; exit 1; }
+[ -f "$XRAY_CONFIG" ] || { echo "Xray config not found: $XRAY_CONFIG" >&2; exit 1; }
+
+if grep -q '"tag": "vless-in"' "$XRAY_CONFIG"; then
+  MODE="relay"
+  KEYS_FILE="${CONFIG_DIR}/relay-keys.txt"
+  LINKS_FILE="${CONFIG_DIR}/relay-links.txt"
+  TAG="Shinkai-RF"
+else
+  MODE="main"
+  KEYS_FILE="${CONFIG_DIR}/keys.txt"
+  LINKS_FILE="${CONFIG_DIR}/links.txt"
+  TAG="Shinkai"
+fi
+
+[ -f "$LINKS_FILE" ] || { echo "Links file not found: $LINKS_FILE (was this node installed with Shinkai?)" >&2; exit 1; }
+
+OLD_LINK="$(grep -m1 '^vless://' "$LINKS_FILE" || true)"
+[ -n "$OLD_LINK" ] || { echo "Could not find an existing vless:// link in $LINKS_FILE" >&2; exit 1; }
+
+link="${OLD_LINK#vless://}"
+link="${link%%#*}"
+hostpart="${link#*@}"
+hostport="${hostpart%%\?*}"
+query="${hostpart#*\?}"
+ADDR="${hostport%%:*}"
+PORT="${hostport##*:}"
+
+get_param() {
+  local key="$1"
+  printf '%s\n' "$query" | tr '&' '\n' | while IFS= read -r kv; do
+    case "$kv" in "$key"=*) printf '%s' "${kv#*=}"; break ;; esac
+  done
+}
+
+SNI="$(get_param sni)"
+FLOW="$(get_param flow)"
+FP="$(get_param fp)"
+[ -n "$FP" ] || FP="random"
+[ -n "$FLOW" ] || FLOW="xtls-rprx-vision"
+
+keys="$("$XRAY_BIN" x25519 2>&1)"
+NEW_PRIVATE="$(printf "%s\n" "$keys" | grep -iE "privat" | awk '{print $NF}' | head -n 1 || true)"
+NEW_PUBLIC="$(printf "%s\n" "$keys" | grep -iE "public|password" | awk '{print $NF}' | head -n 1 || true)"
+[ -n "$NEW_PRIVATE" ] || NEW_PRIVATE="$(printf "%s\n" "$keys" | sed -n '1p' | awk '{print $NF}' || true)"
+[ -n "$NEW_PUBLIC" ] || NEW_PUBLIC="$(printf "%s\n" "$keys" | sed -n '2p' | awk '{print $NF}' || true)"
+NEW_UUID="$(cat /proc/sys/kernel/random/uuid)"
+NEW_SID="$(openssl rand -hex 8)"
+
+[ -n "$NEW_PRIVATE" ] && [ -n "$NEW_PUBLIC" ] && [ -n "$NEW_UUID" ] && [ -n "$NEW_SID" ] || {
+  echo "Key generation failed" >&2
+  exit 1
+}
+
+# Only the inbound client id / privateKey / shortIds are rewritten, first match only -
+# on a relay config the outbound (upstream) section keeps its own "id" untouched.
+awk -v newid="$NEW_UUID" -v newpriv="$NEW_PRIVATE" -v newsid="$NEW_SID" '
+  !did_id && /"id": "/ { sub(/"id": "[^"]*"/, "\"id\": \"" newid "\""); did_id=1 }
+  !did_priv && /"privateKey": "/ { sub(/"privateKey": "[^"]*"/, "\"privateKey\": \"" newpriv "\""); did_priv=1 }
+  !did_sid && /"shortIds": \[/ { sub(/"shortIds": \["[^"]*"\]/, "\"shortIds\": [\"" newsid "\"]"); did_sid=1 }
+  { print }
+' "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp" && mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
+
+systemctl restart xray
+sleep 2
+
+if ! systemctl is-active --quiet xray; then
+  echo "Xray failed to start with the new keys. Check: journalctl -u xray -n 20" >&2
+  exit 1
+fi
+
+mkdir -p "$CONFIG_DIR"
+chmod 700 "$CONFIG_DIR"
+
+NEW_LINK="vless://${NEW_UUID}@${ADDR}:${PORT}?type=tcp&security=reality&fp=${FP}&pbk=${NEW_PUBLIC}&sni=${SNI}&sid=${NEW_SID}&flow=${FLOW}#${TAG}"
+
+if [ "$MODE" = "relay" ]; then
+  UPSTREAM_BLOCK="$(awk '/^=== Upstream hop/{f=1} f{print}' "$KEYS_FILE" 2>/dev/null || true)"
+
+  cat > "$KEYS_FILE" <<EOF
+=== Entry hop (client -> RF) ===
+Server: ${ADDR}
+SNI: ${SNI}
+Port: ${PORT}
+
+UUID: ${NEW_UUID}
+Private Key: ${NEW_PRIVATE}
+Public Key: ${NEW_PUBLIC}
+Short ID: ${NEW_SID}
+
+${UPSTREAM_BLOCK}
+EOF
+
+  cat > "$LINKS_FILE" <<EOF
+VLESS Link (connect your client to the RF node):
+${NEW_LINK}
+
+Connection Parameters:
+Address:     ${ADDR}
+Port:        ${PORT}
+UUID:        ${NEW_UUID}
+Public Key:  ${NEW_PUBLIC}
+Short ID:    ${NEW_SID}
+SNI:         ${SNI}
+Type:        tcp
+Security:    reality
+Fingerprint: ${FP}
+Flow:        ${FLOW}
+EOF
+else
+  cat > "$KEYS_FILE" <<EOF
+Server: ${ADDR}
+SNI: ${SNI}
+Port: ${PORT}
+
+UUID: ${NEW_UUID}
+Private Key: ${NEW_PRIVATE}
+Public Key: ${NEW_PUBLIC}
+Short ID: ${NEW_SID}
+EOF
+
+  cat > "$LINKS_FILE" <<EOF
+VLESS Link:
+${NEW_LINK}
+
+Connection Parameters:
+UUID:        ${NEW_UUID}
+Public Key:  ${NEW_PUBLIC}
+Short ID:    ${NEW_SID}
+SNI:         ${SNI}
+Type:        tcp
+Security:    reality
+Fingerprint: ${FP}
+Flow:        ${FLOW}
+Port:        ${PORT}
+EOF
+fi
+
+chmod 600 "$KEYS_FILE" "$LINKS_FILE"
+
+echo "Keys rotated. Old link is dead, Xray is running with new credentials."
+echo ""
+echo "New link:"
+echo "${NEW_LINK}"
+ROTATESCRIPT
+
+  chmod +x /usr/local/bin/vless-rotate
 }
 
 configure_firewall() {
