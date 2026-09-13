@@ -50,11 +50,38 @@ fi
 
 # 3. Remove anything the installer may have left behind.
 rm -rf /usr/local/etc/xray /usr/local/share/xray /var/log/xray "$CONFIG_DIR" >/dev/null 2>&1 || true
-rm -f /usr/local/bin/xray /usr/local/bin/vless-mode >/dev/null 2>&1 || true
+rm -f /usr/local/bin/xray /usr/local/bin/vless-mode /usr/local/bin/vless-rotate >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/xray.service /etc/systemd/system/xray@.service >/dev/null 2>&1 || true
 rm -rf /etc/systemd/system/xray.service.d /etc/systemd/system/xray@.service.d >/dev/null 2>&1 || true
 systemctl daemon-reload >/dev/null 2>&1 || true
 echo -e "  ${GREEN}OK${NC} Binaries, configs and keys removed"
+
+# 3b. Remove the web front from install-web.sh. Our nginx sites start with a
+#     "Managed by shinkai install-web.sh" header; nginx itself and Let's Encrypt
+#     certificates stay, they may serve other sites on this machine.
+WEB_REMOVED=0
+for conf in /etc/nginx/sites-available/*.conf; do
+  [ -f "$conf" ] || continue
+  grep -q 'Managed by shinkai install-web.sh' "$conf" 2>/dev/null || continue
+  webroot="$(awk '$1 == "root" && $2 !~ /certbot/ { gsub(";", "", $2); print $2; exit }' "$conf")"
+  rm -f "/etc/nginx/sites-enabled/$(basename "$conf")" "$conf"
+  case "$webroot" in
+    /var/www/?*) rm -rf "$webroot" ;;
+  esac
+  WEB_REMOVED=1
+done
+rm -f /etc/nginx/conf.d/shinkai-ws.conf /etc/cron.d/shinkai-rates >/dev/null 2>&1 || true
+rm -f /usr/local/bin/vless-web-rollback /usr/local/bin/shinkai-rates-update >/dev/null 2>&1 || true
+rm -rf /root/vless-backup /var/www/certbot >/dev/null 2>&1 || true
+if [ "$WEB_REMOVED" = "1" ] && command -v nginx >/dev/null 2>&1; then
+  if ls /etc/nginx/sites-enabled/* >/dev/null 2>&1; then
+    systemctl reload nginx >/dev/null 2>&1 || true
+  else
+    systemctl stop nginx >/dev/null 2>&1 || true
+    systemctl disable nginx >/dev/null 2>&1 || true
+  fi
+  echo -e "  ${GREEN}OK${NC} Web front removed (nginx site, web root, rates job, backups); certificates kept"
+fi
 
 # 4. Close the firewall ports the installer opened.
 for p in $PORTS; do
@@ -83,5 +110,5 @@ fi
 
 echo ""
 echo -e "  ${GREEN}${BOLD}Shinkai fully removed.${NC}"
-echo -e "  ${DIM}Gone: xray service + binary, ${XRAY_CONFIG%/*}, ${CONFIG_DIR}, vless-mode${NC}"
+echo -e "  ${DIM}Gone: xray service + binary, ${XRAY_CONFIG%/*}, ${CONFIG_DIR}, vless-mode, vless-rotate, web front${NC}"
 echo ""
