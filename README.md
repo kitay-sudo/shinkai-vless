@@ -33,6 +33,8 @@ curl -sSL https://raw.githubusercontent.com/kitay-sudo/shinkai-vless/main/instal
 
 Без аргументов скрипт спросит всё интерактивно. Порт по умолчанию `443` (занят — задай `VLESS_PORT=8443`).
 
+На свежей VM первые минуты работает `unattended-upgrades` и держит блокировку apt — установщик дождётся её сам (до 5 минут, меняется через `APT_LOCK_WAIT`).
+
 Готовая ссылка и ключи:
 
 ```bash

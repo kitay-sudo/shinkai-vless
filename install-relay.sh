@@ -28,6 +28,9 @@ CURRENT_STEP=0
 LOG_FILE="/tmp/shinkai-relay-install.log"
 FAILED=0
 
+# Seconds to wait for cloud-init / unattended-upgrades to release the apt lock
+APT_LOCK_WAIT="${APT_LOCK_WAIT:-300}"
+
 # RF (this) server, the entry node the client connects to
 RF_ADDR="${1:-${RF_SERVER:-${RF_ADDR:-}}}"
 INBOUND_SNI="${RELAY_SNI:-${INBOUND_SNI:-}}"
@@ -345,15 +348,82 @@ collect_input() {
   fi
 }
 
+apt_lock_busy() {
+  if command -v fuser >/dev/null 2>&1; then
+    if fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock \
+      /var/lib/apt/lists/lock /var/cache/apt/archives/lock >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
+  fi
+
+  if pgrep -x apt >/dev/null 2>&1 \
+    || pgrep -x apt-get >/dev/null 2>&1 \
+    || pgrep -x dpkg >/dev/null 2>&1 \
+    || pgrep -f unattended-upgr >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# Fresh cloud images (Yandex Cloud, Timeweb, Hetzner, ...) run cloud-init and
+# unattended-upgrades right after boot and hold the dpkg lock for a few minutes.
+wait_for_apt_lock() {
+  local timeout="${1:-$APT_LOCK_WAIT}"
+  local waited=0
+
+  while apt_lock_busy; do
+    if [ "$waited" -ge "$timeout" ]; then
+      echo "apt/dpkg lock still held after ${waited}s"
+      return 1
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+
+  if [ "$waited" -gt 0 ]; then
+    echo "apt/dpkg lock released after ${waited}s"
+  fi
+  return 0
+}
+
+apt_install_packages() {
+  local attempt=1
+  local max_attempts=3
+
+  wait_for_apt_lock || true
+
+  while :; do
+    if apt-get -o DPkg::Lock::Timeout=180 update -qq \
+      && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=180 \
+        install -y curl wget unzip openssl ca-certificates >/dev/null; then
+      return 0
+    fi
+
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      return 1
+    fi
+
+    echo "apt attempt ${attempt} failed, waiting for the lock and retrying..."
+    attempt=$((attempt + 1))
+    wait_for_apt_lock 120 || true
+    sleep 5
+  done
+}
+
 install_dependencies() {
   step_start "Installing system dependencies..."
 
-  if run_with_spinner "apt update and install packages" \
-    bash -c "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget unzip openssl ca-certificates >/dev/null"; then
+  if apt_lock_busy; then
+    info "apt is busy (cloud-init / unattended-upgrades), waiting up to ${APT_LOCK_WAIT}s..."
+  fi
+
+  if run_with_spinner "apt update and install packages" apt_install_packages; then
     step_done "System dependencies installed"
   else
     step_fail "Dependency installation failed"
     show_log_tail 10
+    info "Another process is holding the apt/dpkg lock. Wait for it to finish, then re-run the installer."
     exit 1
   fi
   echo ""
