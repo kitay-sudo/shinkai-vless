@@ -584,160 +584,128 @@ MODESCRIPT
 install_rotate_script() {
   cat > /usr/local/bin/vless-rotate <<'ROTATESCRIPT'
 #!/usr/bin/env bash
-# vless-rotate - regenerate UUID + Reality keys, kill the old (leaked) client link
+# vless-rotate - regenerate the entry credentials, kill the old (leaked) client link
+#
+# The new link is the old one with credentials swapped, so transport settings
+# (xhttp path and mode, ws host, flow, alpn, fingerprint) stay exactly as installed.
+#   main  (install.sh)       new UUID + Reality key pair + short id
+#   relay (install-relay.sh) same, entry hop only - the upstream keeps its own credentials
+#   web   (install-web.sh)   new UUID only - TLS comes from the site certificate
 set -Eeuo pipefail
 
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
 CONFIG_DIR="/root/vless-config"
 XRAY_BIN="/usr/local/bin/xray"
 
-if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-  echo "Run as root: sudo vless-rotate" >&2
+die() {
+  echo "$1" >&2
   exit 1
+}
+
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+  die "Run as root: sudo vless-rotate"
 fi
 
 command -v "$XRAY_BIN" >/dev/null 2>&1 || XRAY_BIN="xray"
-command -v "$XRAY_BIN" >/dev/null 2>&1 || { echo "xray binary not found" >&2; exit 1; }
-[ -f "$XRAY_CONFIG" ] || { echo "Xray config not found: $XRAY_CONFIG" >&2; exit 1; }
+command -v "$XRAY_BIN" >/dev/null 2>&1 || die "xray binary not found"
+[ -f "$XRAY_CONFIG" ] || die "Xray config not found: $XRAY_CONFIG"
 
-if grep -q '"tag": "vless-in"' "$XRAY_CONFIG"; then
+if [ -f "${CONFIG_DIR}/web-links.txt" ] && grep -q '"network": "ws"' "$XRAY_CONFIG"; then
+  MODE="web"
+  FILES="web-links.txt web-keys.txt web-client.json"
+elif grep -q '"tag": "to-upstream"' "$XRAY_CONFIG"; then
   MODE="relay"
-  KEYS_FILE="${CONFIG_DIR}/relay-keys.txt"
-  LINKS_FILE="${CONFIG_DIR}/relay-links.txt"
-  TAG="Shinkai-RF"
+  FILES="relay-links.txt relay-keys.txt"
 else
   MODE="main"
-  KEYS_FILE="${CONFIG_DIR}/keys.txt"
-  LINKS_FILE="${CONFIG_DIR}/links.txt"
-  TAG="Shinkai"
+  FILES="links.txt keys.txt"
 fi
+LINKS_FILE="${CONFIG_DIR}/${FILES%% *}"
 
-[ -f "$LINKS_FILE" ] || { echo "Links file not found: $LINKS_FILE (was this node installed with Shinkai?)" >&2; exit 1; }
+[ -f "$LINKS_FILE" ] || die "Links file not found: $LINKS_FILE (was this node installed with Shinkai?)"
 
 OLD_LINK="$(grep -m1 '^vless://' "$LINKS_FILE" || true)"
-[ -n "$OLD_LINK" ] || { echo "Could not find an existing vless:// link in $LINKS_FILE" >&2; exit 1; }
-
-link="${OLD_LINK#vless://}"
-link="${link%%#*}"
-hostpart="${link#*@}"
-hostport="${hostpart%%\?*}"
-query="${hostpart#*\?}"
-ADDR="${hostport%%:*}"
-PORT="${hostport##*:}"
+[ -n "$OLD_LINK" ] || die "Could not find an existing vless:// link in $LINKS_FILE"
 
 get_param() {
-  local key="$1"
+  local query="${OLD_LINK#*\?}"
+  query="${query%%#*}"
   printf '%s\n' "$query" | tr '&' '\n' | while IFS= read -r kv; do
-    case "$kv" in "$key"=*) printf '%s' "${kv#*=}"; break ;; esac
+    case "$kv" in "$1"=*) printf '%s' "${kv#*=}"; break ;; esac
   done
 }
 
-SNI="$(get_param sni)"
-FLOW="$(get_param flow)"
-FP="$(get_param fp)"
-[ -n "$FP" ] || FP="random"
-[ -n "$FLOW" ] || FLOW="xtls-rprx-vision"
-
-keys="$("$XRAY_BIN" x25519 2>&1)"
-NEW_PRIVATE="$(printf "%s\n" "$keys" | grep -iE "privat" | awk '{print $NF}' | head -n 1 || true)"
-NEW_PUBLIC="$(printf "%s\n" "$keys" | grep -iE "public|password" | awk '{print $NF}' | head -n 1 || true)"
-[ -n "$NEW_PRIVATE" ] || NEW_PRIVATE="$(printf "%s\n" "$keys" | sed -n '1p' | awk '{print $NF}' || true)"
-[ -n "$NEW_PUBLIC" ] || NEW_PUBLIC="$(printf "%s\n" "$keys" | sed -n '2p' | awk '{print $NF}' || true)"
-NEW_UUID="$(cat /proc/sys/kernel/random/uuid)"
-NEW_SID="$(openssl rand -hex 8)"
-
-[ -n "$NEW_PRIVATE" ] && [ -n "$NEW_PUBLIC" ] && [ -n "$NEW_UUID" ] && [ -n "$NEW_SID" ] || {
-  echo "Key generation failed" >&2
-  exit 1
+# Credentials are swapped with sed, so only accept values without sed/regex metacharacters.
+safe_token() {
+  case "$1" in
+    "" | *[!A-Za-z0-9_-]*) return 1 ;;
+  esac
+  return 0
 }
 
-# Only the inbound client id / privateKey / shortIds are rewritten, first match only -
-# on a relay config the outbound (upstream) section keeps its own "id" untouched.
-awk -v newid="$NEW_UUID" -v newpriv="$NEW_PRIVATE" -v newsid="$NEW_SID" '
-  !did_id && /"id": "/ { sub(/"id": "[^"]*"/, "\"id\": \"" newid "\""); did_id=1 }
-  !did_priv && /"privateKey": "/ { sub(/"privateKey": "[^"]*"/, "\"privateKey\": \"" newpriv "\""); did_priv=1 }
-  !did_sid && /"shortIds": \[/ { sub(/"shortIds": \["[^"]*"\]/, "\"shortIds\": [\"" newsid "\"]"); did_sid=1 }
-  { print }
-' "$XRAY_CONFIG" > "${XRAY_CONFIG}.tmp" && mv "${XRAY_CONFIG}.tmp" "$XRAY_CONFIG"
+OLD_UUID="${OLD_LINK#vless://}"
+OLD_UUID="${OLD_UUID%%@*}"
+safe_token "$OLD_UUID" || die "Could not read the UUID from the current link"
+grep -q "\"${OLD_UUID}\"" "$XRAY_CONFIG" \
+  || die "The link in $LINKS_FILE does not match the running config. Nothing changed."
+
+NEW_UUID="$(cat /proc/sys/kernel/random/uuid)"
+SUBST="s|${OLD_UUID}|${NEW_UUID}|g"
+
+if [ "$MODE" != "web" ]; then
+  OLD_PBK="$(get_param pbk)"
+  OLD_SID="$(get_param sid)"
+  OLD_PRIVATE="$(grep -m1 -oE '"privateKey": *"[^"]+"' "$XRAY_CONFIG" | sed -E 's/.*"([^"]+)"$/\1/' || true)"
+  for token in "$OLD_PBK" "$OLD_SID" "$OLD_PRIVATE"; do
+    safe_token "$token" || die "Reality keys not found in the config or link. Nothing changed."
+  done
+
+  keys="$("$XRAY_BIN" x25519 2>&1)"
+  NEW_PRIVATE="$(printf "%s\n" "$keys" | grep -iE "privat" | awk '{print $NF}' | head -n 1 || true)"
+  NEW_PUBLIC="$(printf "%s\n" "$keys" | grep -iE "public|password" | awk '{print $NF}' | head -n 1 || true)"
+  NEW_SID="$(openssl rand -hex 8)"
+  for token in "$NEW_PRIVATE" "$NEW_PUBLIC" "$NEW_SID"; do
+    safe_token "$token" || die "Key generation failed. Nothing changed."
+  done
+
+  SUBST="${SUBST};s|${OLD_PRIVATE}|${NEW_PRIVATE}|g;s|${OLD_PBK}|${NEW_PUBLIC}|g;s|${OLD_SID}|${NEW_SID}|g"
+fi
+
+BACKUP="${XRAY_CONFIG}.pre-rotate"
+cp -p "$XRAY_CONFIG" "$BACKUP"
+
+tmp="$(mktemp --suffix=.json)"
+sed "$SUBST" "$XRAY_CONFIG" > "$tmp"
+
+if ! "$XRAY_BIN" test -c "$tmp" >/dev/null 2>&1 && ! "$XRAY_BIN" run -test -c "$tmp" >/dev/null 2>&1; then
+  rm -f "$tmp"
+  die "The rotated config did not pass xray validation. Nothing changed."
+fi
+
+cat "$tmp" > "$XRAY_CONFIG"
+rm -f "$tmp"
 
 systemctl restart xray
 sleep 2
 
 if ! systemctl is-active --quiet xray; then
-  echo "Xray failed to start with the new keys. Check: journalctl -u xray -n 20" >&2
-  exit 1
+  cat "$BACKUP" > "$XRAY_CONFIG"
+  systemctl restart xray || true
+  die "Xray failed to start with the new credentials. Previous config restored, the old link still works."
 fi
 
-mkdir -p "$CONFIG_DIR"
-chmod 700 "$CONFIG_DIR"
+NEW_LINK="$(printf '%s\n' "$OLD_LINK" | sed "$SUBST")"
 
-NEW_LINK="vless://${NEW_UUID}@${ADDR}:${PORT}?type=tcp&security=reality&fp=${FP}&pbk=${NEW_PUBLIC}&sni=${SNI}&sid=${NEW_SID}&flow=${FLOW}#${TAG}"
+for name in $FILES; do
+  if [ -f "${CONFIG_DIR}/${name}" ]; then
+    sed -i "$SUBST" "${CONFIG_DIR}/${name}"
+  fi
+done
 
+echo "Keys rotated (${MODE} node). Old link is dead, Xray is running with new credentials."
 if [ "$MODE" = "relay" ]; then
-  UPSTREAM_BLOCK="$(awk '/^=== Upstream hop/{f=1} f{print}' "$KEYS_FILE" 2>/dev/null || true)"
-
-  cat > "$KEYS_FILE" <<EOF
-=== Entry hop (client -> RF) ===
-Server: ${ADDR}
-SNI: ${SNI}
-Port: ${PORT}
-
-UUID: ${NEW_UUID}
-Private Key: ${NEW_PRIVATE}
-Public Key: ${NEW_PUBLIC}
-Short ID: ${NEW_SID}
-
-${UPSTREAM_BLOCK}
-EOF
-
-  cat > "$LINKS_FILE" <<EOF
-VLESS Link (connect your client to the RF node):
-${NEW_LINK}
-
-Connection Parameters:
-Address:     ${ADDR}
-Port:        ${PORT}
-UUID:        ${NEW_UUID}
-Public Key:  ${NEW_PUBLIC}
-Short ID:    ${NEW_SID}
-SNI:         ${SNI}
-Type:        tcp
-Security:    reality
-Fingerprint: ${FP}
-Flow:        ${FLOW}
-EOF
-else
-  cat > "$KEYS_FILE" <<EOF
-Server: ${ADDR}
-SNI: ${SNI}
-Port: ${PORT}
-
-UUID: ${NEW_UUID}
-Private Key: ${NEW_PRIVATE}
-Public Key: ${NEW_PUBLIC}
-Short ID: ${NEW_SID}
-EOF
-
-  cat > "$LINKS_FILE" <<EOF
-VLESS Link:
-${NEW_LINK}
-
-Connection Parameters:
-UUID:        ${NEW_UUID}
-Public Key:  ${NEW_PUBLIC}
-Short ID:    ${NEW_SID}
-SNI:         ${SNI}
-Type:        tcp
-Security:    reality
-Fingerprint: ${FP}
-Flow:        ${FLOW}
-Port:        ${PORT}
-EOF
+  echo "Only the entry hop changed; the upstream credentials are untouched."
 fi
-
-chmod 600 "$KEYS_FILE" "$LINKS_FILE"
-
-echo "Keys rotated. Old link is dead, Xray is running with new credentials."
 echo ""
 echo "New link:"
 echo "${NEW_LINK}"
